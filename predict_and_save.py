@@ -11,10 +11,10 @@ from data import generate_sine_sequence
 
 
 # === Settings ===
-history_len = 80
+history_len = 150
 predict_len = 50
 seq_len = history_len + predict_len
-num_samples = 1000
+num_samples = 50
 checkpoint_path = "checkpoints\score_model.pth"
 output_dir = "Data/Predictions"
 os.makedirs(output_dir, exist_ok=True)
@@ -35,7 +35,7 @@ history = generate_sine_sequence(num_samples, history_len, input_dim=1).to(devic
 
 # === Sample predictions ===
 with torch.no_grad():
-    predicted = sample_conditional(model, history, predict_len=predict_len, num_steps=1000, device=device)
+    predicted = sample_conditional(model, history, predict_len=predict_len, num_steps=500, device=device)
 
 # === Combine and label columns ===
 full_sequence = torch.cat([history, predicted], dim=1).squeeze(-1).cpu().numpy()
