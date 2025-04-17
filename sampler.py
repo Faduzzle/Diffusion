@@ -1,21 +1,18 @@
 import torch
-import numpy as np
-from tqdm import tqdm
-from sde import VPSDE
 
-def sample_conditional(score_net, x_history, predict_len, num_steps, device):
-    sde = VPSDE()
-    batch_size = x_history.size(0)
-    input_dim = x_history.size(-1)
-    x = torch.randn((batch_size, predict_len, input_dim), device=device)
-    dt = -1.0 / num_steps
+def sample(model, sde, hist, pred_len, steps=100):
+    model.eval()
+    device = next(model.parameters()).device
+    batch_size = hist.size(0)
+    x = torch.randn(batch_size, pred_len, 1).to(device)
+    ts = torch.linspace(1., 1e-3, steps).to(device)
+    dt = -1. / steps
 
-    with torch.no_grad():
-        for i in tqdm(range(num_steps - 1, -1, -1), desc="Sampling"):
-            t = torch.full((batch_size, 1), i / num_steps, device=device)
-            score = score_net(x, x_history, t)
-            drift = sde.f(x, t) - (sde.g(t) ** 2) * score
-            z = torch.randn_like(x)
-            x = x + drift * dt + sde.g(t) * np.sqrt(-dt) * z
+    for t in ts:
+        t_batch = torch.full((batch_size, 1), t).to(device)
+        score = model(x, t_batch, hist)
+        drift = sde.f(x, t_batch)
+        diffusion = sde.g(t_batch).view(-1, 1, 1)
+        x = x + (drift - diffusion**2 * score.unsqueeze(-1)) * dt + diffusion * torch.sqrt(-dt) * torch.randn_like(x)
 
-    return x
+    return x.detach()
