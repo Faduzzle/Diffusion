@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
 def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=64, lr=1e-3,
-          save_dir='checkpoints', checkpoint_freq=100, use_score_matching=True):
+          save_dir='checkpoints', checkpoint_freq=100):
     os.makedirs(save_dir, exist_ok=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -27,34 +27,17 @@ def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=
             hist = hist.to(next(model.parameters()).device)
             future = future.to(next(model.parameters()).device)
 
-            # Sample diffusion time and expand to future length
-            t = torch.rand(hist.size(0)).to(hist.device) * 0.998 + 0.001         # [B]
-            t_expand = t.unsqueeze(1).expand(-1, future.size(1))                 # [B, pred_len]
-
-            # Get noised future
-            mean, std = sde.p(future, t_expand)                                  # [B, pred_len, 1]
+            t = torch.rand(hist.size(0)).to(hist.device) * 0.998 + 0.001    # [B], avoid 0 and 1
+            t_expand = t.unsqueeze(1).expand(-1, future.size(1))            # [B, predict_len]
+            mean, std = sde.p(future, t_expand)                             # [B, predict_len, 1]
             noise = torch.randn_like(std)
-            x_t = mean + std * noise                                             # [B, pred_len, 1]
+            x_t = mean + std * noise                                       # [B, predict_len, 1]
 
-            # Forward through model
-            score_pred = model(x_t, hist, t.unsqueeze(1))                        # [B, pred_len, 1]
+            score_pred = model(x_t, hist, t.unsqueeze(1))                  # [B, predict_len, 1]
+            loss = torch.mean(torch.pow(std * score_pred + noise, 2))
 
-            # Toggle: score matching vs. denoising
-            if use_score_matching:
-                target = -noise / std                                            # score = -ε / σ
-                target = torch.clamp(target, -5, 5)                              # stabilize exploding scores
-            else:
-                target = future                                                  # denoising target
-
-            # Sanity check
-            assert score_pred.shape == target.shape, \
-                f"Shape mismatch: pred={score_pred.shape}, target={target.shape}"
-
-            # Loss
-            loss = F.mse_loss(score_pred, target)
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)    # clip to avoid exploding gradients
             optimizer.step()
 
             total_loss += loss.item()
@@ -62,7 +45,6 @@ def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=
         avg_loss = total_loss / len(loader)
         global_bar.set_postfix(loss=avg_loss)
 
-        # Save checkpoints
         if (epoch + 1) % checkpoint_freq == 0 or (epoch + 1) == n_epochs:
             epoch_path = os.path.join(save_dir, f"model_epoch_{epoch+1:04d}.pt")
             latest_path = os.path.join(save_dir, "latest.pth")
