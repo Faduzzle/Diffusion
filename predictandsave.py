@@ -13,16 +13,16 @@ from data import generate_sine_sequence
 
 # ==== CONFIGURATION ====
 CONFIG = {
-    "checkpoint_path": "checkpoints\latest.pth",  # <--- change this path to your model
+    "checkpoint_path": r"checkpoints\latest.pth",  # <--- change this path to your model
     "history_len": 50,
-    "predict_len": 150,
+    "predict_len": 50,
     "input_dim": 1,
     "num_samples": 5,
-    "num_diffusion_timesteps": 1000
+    "num_diffusion_timesteps": 500
 }
 
 
-def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=150, input_dim=1,
+def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=50, input_dim=1,
                             num_samples=5, num_diffusion_timesteps=1000):
 
     sys.stdout.reconfigure(line_buffering=True)
