@@ -8,10 +8,8 @@ from tqdm.auto import tqdm
 from model import ScoreTransformerNet
 from sde import VPSDE
 from data import load_tsf, slice_tsf_tensor
+from config import CONFIG
 
-# ============================
-# 🔧 TRAINING FUNCTION
-# ============================
 def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=64, lr=1e-3,
           save_dir='checkpoints', checkpoint_freq=100):
     os.makedirs(save_dir, exist_ok=True)
@@ -61,44 +59,36 @@ def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=
     total_time = time.time() - total_training_start
     print(f"\n✅ Training complete in {total_time:.2f} seconds ({total_time/60:.2f} min)")
 
-# ============================
-# 🔧 TSF-AWARE WRAPPER
-# ============================
-def train_model_on_tsf(tsf_path, history_len, predict_len, save_name,
-                       n_epochs=1000, batch_size=64, lr=1e-3, n_samples=1000, checkpoint_freq=100):
+def train_model_from_config():
+    data = slice_tsf_tensor(
+        load_tsf(CONFIG["tsf_path"]),
+        CONFIG["history_len"],
+        CONFIG["predict_len"],
+        n_samples=CONFIG["n_samples"]
+    )
 
-    full_tensor = load_tsf(tsf_path)
-    train_data = slice_tsf_tensor(full_tensor, history_len, predict_len, n_samples=n_samples)
+    model = ScoreTransformerNet(
+        input_dim=CONFIG["input_dim"],
+        history_len=CONFIG["history_len"],
+        predict_len=CONFIG["predict_len"]
+    ).to("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = ScoreTransformerNet(input_dim=1, history_len=history_len, predict_len=predict_len).to(
-        "cuda" if torch.cuda.is_available() else "cpu")
     sde = VPSDE()
 
-    checkpoint_dir = "checkpoints"
-    os.makedirs(checkpoint_dir, exist_ok=True)
-
-    train(model, sde, train_data, history_len, predict_len,
-          n_epochs=n_epochs,
-          batch_size=batch_size,
-          lr=lr,
-          save_dir=checkpoint_dir,
-          checkpoint_freq=checkpoint_freq)
-
-    final_path = os.path.join(checkpoint_dir, f"{save_name}.pth")
-    torch.save({'score_net_state_dict': model.state_dict()}, final_path)
-    print(f"✅ Final model saved as: {final_path}")
-
-# ============================
-# 🔧 MAIN (Optional)
-# ============================
-if __name__ == "__main__":
-    train_model_on_tsf(
-        tsf_path="Data Files/bitcoin_data.tsf",
-        history_len=50,
-        predict_len=50,
-        save_name="bitcoin_data_trained",
-        n_epochs=500,
-        batch_size=64,
-        lr=1e-3,
-        n_samples=1000
+    train(
+        model, sde, data,
+        history_len=CONFIG["history_len"],
+        predict_len=CONFIG["predict_len"],
+        n_epochs=CONFIG["n_epochs"],
+        batch_size=CONFIG["batch_size"],
+        lr=CONFIG["lr"],
+        save_dir=CONFIG["checkpoint_dir"],
+        checkpoint_freq=CONFIG["checkpoint_freq"]
     )
+
+    torch.save({'score_net_state_dict': model.state_dict()},
+               os.path.join(CONFIG["checkpoint_dir"], f"{CONFIG['save_name']}.pth"))
+    print(f"✅ Final model saved to: checkpoints/{CONFIG['save_name']}.pth")
+
+if __name__ == "__main__":
+    train_model_from_config()
