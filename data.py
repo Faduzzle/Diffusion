@@ -72,91 +72,31 @@ def generate_custom_series(n_samples, total_seq_len, input_dim=1,
 # ============================
 # 🔧 CSV LOADING FUNCTION
 # ============================
-def load_csv_time_series(csv_path, history_len, predict_len,
-                         normalize=True, fill_method="ffill",
-                         n_samples=1000, stride=1, return_raw=False):
-    df = pd.read_csv(csv_path, index_col=0 if "date" in csv_path.lower() else None)
-    if fill_method:
-        df = df.fillna(method=fill_method)
-    if normalize:
-        df = (df - df.mean()) / (df.std() + 1e-8)
-    data = df.to_numpy(dtype=np.float32)
-    T, D = data.shape
-    window_size = history_len + predict_len
-    if T < window_size:
-        raise ValueError("Time series too short for specified window size.")
-    max_start = T - window_size
-    starts = np.random.choice(np.arange(0, max_start, stride), size=n_samples, replace=True)
-    sequences = np.stack([data[s:s+window_size] for s in starts])
-    tensor = torch.tensor(sequences)
-    return (tensor, df) if return_raw else tensor
 
-# ============================
-# 🔧 TSF FILE LOADING FUNCTION
-# ============================
-def load_tsf(path, target_column="target", return_dataframe=False):
-    with open(path, "r") as f:
-        lines = f.readlines()
-    data_start = [i for i, line in enumerate(lines) if "@data" in line.lower()][0]
-    data_lines = lines[data_start + 1:]
-    series = []
-    for line in data_lines:
-        parts = line.strip().split(",")
-        if len(parts) < 2:
-            continue
-        values = [float(v) for v in parts[1].split()]
-        series.append(values)
-    max_len = max(len(s) for s in series)
-    padded = np.array([s + [np.nan] * (max_len - len(s)) for s in series], dtype=np.float32)
-    if return_dataframe:
-        return pd.DataFrame(padded)
-    return torch.tensor(padded).unsqueeze(-1)
+def detect_normalization_factor(data, method="percentile", percentile=95):
+    if method == "max":
+        factor = np.max(np.abs(data))
+    elif method == "percentile":
+        factor = np.percentile(np.abs(data), percentile)
+    elif method == "log":
+        eps = 1e-8
+        factor = np.exp(np.mean(np.log(np.abs(data) + eps)))
+    else:
+        raise ValueError(f"Unknown normalization method: {method}")
 
-# ============================
-# 🔧 SLICE TSF SERIES INTO WINDOWS
-# ============================
-def slice_tsf_tensor(data_tensor, history_len, predict_len, n_samples=1000, stride=1):
-    B, T, D = data_tensor.shape
-    window_size = history_len + predict_len
-    if T < window_size:
-        raise ValueError("Each time series must be longer than history_len + predict_len.")
-    all_slices = []
-    for b in range(B):
-        series = data_tensor[b]
-        for start in range(0, T - window_size + 1, stride):
-            window = series[start:start+window_size]
-            if torch.isnan(window).any():
-                continue
-            all_slices.append(window)
-            if len(all_slices) >= n_samples:
-                return torch.stack(all_slices[:n_samples])
-    return torch.stack(all_slices[:n_samples])
+    print(f"✅ Detected normalization factor ({method}): {factor:.4f}")
+    return factor
 
-# ============================
-# 🔧 ROLLING SPLIT FOR FORECASTING (TimeSeriesSplit-style)
-# ============================
-def rolling_split_tsf_tensor(full_tensor, history_len, predict_len, n_splits=5):
-    B, T, D = full_tensor.shape
-    window_size = history_len + predict_len
-    all_slices = []
+def load_csv_time_series(csv_path, history_len, predict_len, method="percentile"):
+    df = pd.read_csv(csv_path)
+    data = df.values.astype(np.float32)  # [T, N_samples]
 
-    for b in range(B):
-        series = full_tensor[b]
-        fold_size = (T - window_size) // (n_splits + 1)
-        for k in range(n_splits):
-            train_end = (k + 1) * fold_size
-            test_start = train_end
-            test_end = test_start + predict_len
-            if test_end > T or train_end < history_len:
-                continue
-            hist_start = train_end - history_len
-            hist = series[hist_start:train_end]
-            fut = series[test_start:test_end]
-            window = torch.cat([hist, fut], dim=0)
-            if not torch.isnan(window).any():
-                all_slices.append(window)
+    norm_factor = detect_normalization_factor(data, method=method)
+    data = data / (norm_factor + 1e-8)
 
-    return torch.stack(all_slices) if all_slices else torch.empty(0, window_size, D)
+    data = torch.from_numpy(data).permute(1, 0).unsqueeze(-1)  # [N_samples, T, 1]
+    return data, norm_factor
+
 
 # ============================
 # 📈 FORECAST EVALUATION METRICS
