@@ -5,74 +5,75 @@ import math
 class TimeEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
-        self.linear1 = nn.Linear(1, dim)
-        self.act = nn.GELU()
-        self.linear2 = nn.Linear(dim, dim)
+        self.net = nn.Sequential(
+            nn.Linear(1, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim)
+        )
 
     def forward(self, t):
-        t = self.linear1(t)
-        t = self.act(t)
-        t = self.linear2(t)
-        return t  # [B, dim]
+        return self.net(t)  # [B, dim]
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, dim, max_len=1000):
+    def __init__(self, dim):
         super().__init__()
-        pe = torch.zeros(max_len, dim)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, dim, 2).float() * (-math.log(10000.0) / dim))
+        self.dim = dim
+
+    def forward(self, length, device):
+        position = torch.arange(0, length, dtype=torch.float, device=device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.dim, 2, device=device).float() * (-math.log(10000.0) / self.dim))
+        pe = torch.zeros(length, self.dim, device=device)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe.unsqueeze(0))  # [1, max_len, dim]
-
-    def forward(self, x):
-        return x + self.pe[:, :x.size(1)]  # [B, T, dim]
+        return pe.unsqueeze(0)  # [1, length, dim]
 
 class ScoreTransformerNet(nn.Module):
-    def __init__(self, input_dim=1, history_len=50, predict_len=50,
+    def __init__(self, input_dim=1, history_len=50, predict_len=20,
                  model_dim=256, num_heads=4, num_layers=4):
         super().__init__()
 
         self.history_len = history_len
         self.predict_len = predict_len
-        self.total_len = history_len + predict_len
 
         self.input_proj = nn.Linear(input_dim, model_dim)
         self.time_embed = TimeEmbedding(model_dim)
-        self.pos_encoding = PositionalEncoding(model_dim, max_len=self.total_len)
+        self.pos_encoding = PositionalEncoding(model_dim)
+        self.concat_fuse = nn.Linear(3 * model_dim, model_dim)
 
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=model_dim,
-                nhead=num_heads,
-                dim_feedforward=4 * model_dim,
-                batch_first=True
-            ),
+        self.encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=model_dim, nhead=num_heads,
+                                       dim_feedforward=4 * model_dim, batch_first=True),
+            num_layers=num_layers
+        )
+        self.decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(d_model=model_dim, nhead=num_heads,
+                                       dim_feedforward=4 * model_dim, batch_first=True),
             num_layers=num_layers
         )
 
         self.output_proj = nn.Linear(model_dim, input_dim)
 
     def forward(self, x_t, x_history, t):
-        """
-        Args:
-            x_t: [B, predict_len, input_dim] — noised future
-            x_history: [B, history_len, input_dim] — clean context
-            t: [B, 1] — diffusion timestep
-        Returns:
-            score_pred: [B, predict_len, input_dim]
-        """
-        h_embed = self.input_proj(x_history)                     # [B, hist_len, model_dim]
-        x_embed = self.input_proj(x_t)                           # [B, pred_len, model_dim]
+        B, _, _ = x_t.shape
+        device = x_t.device
 
-        t_embed = self.time_embed(t).unsqueeze(1).expand(-1, self.predict_len, -1)
-        x_embed = x_embed + t_embed                              # add t only to future
+        t_embed = self.time_embed(t)  # [B, model_dim]
+        t_future = t_embed.unsqueeze(1).expand(-1, self.predict_len, -1)
+        t_hist = t_embed.unsqueeze(1).expand(-1, self.history_len, -1)
 
-        tokens = torch.cat([h_embed, x_embed], dim=1)           # [B, total_len, model_dim]
-        tokens = self.pos_encoding(tokens)                      # add positional encodings
+        pe_future = self.pos_encoding(self.predict_len, device).expand(B, -1, -1)
+        pe_hist = self.pos_encoding(self.history_len, device).expand(B, -1, -1)
 
-        encoded = self.transformer(tokens)                      # [B, total_len, model_dim]
-        future_encoded = encoded[:, self.history_len:, :]       # [B, pred_len, model_dim]
+        x_future = self.input_proj(x_t)
+        x_hist = self.input_proj(x_history)
 
-        score = self.output_proj(future_encoded)                # [B, pred_len, input_dim]
-        return score
+        x_future = torch.cat([x_future, t_future, pe_future], dim=-1)
+        x_hist = torch.cat([x_hist, t_hist, pe_hist], dim=-1)
+
+        x_future = self.concat_fuse(x_future)
+        x_hist = self.concat_fuse(x_hist)
+
+        h_encoded = self.encoder(x_hist)
+        decoded = self.decoder(x_future, h_encoded)
+
+        return self.output_proj(decoded)

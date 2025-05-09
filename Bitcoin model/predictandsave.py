@@ -1,47 +1,61 @@
 import os
-import sys
 import torch
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from torch.utils.data import Subset, DataLoader
 
 from model import ScoreTransformerNet
 from sde import VPSDE
 from config import CONFIG
-from data import load_csv_time_series, compute_all_metrics
+from data import load_folder_as_tensor, SlidingWindowDataset
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+def compute_crps(samples, truth):
+    N = samples.shape[0]
+    term1 = np.mean(np.abs(samples - truth), axis=0)
+    term2 = 0.5 * np.mean(np.abs(samples[:, None] - samples[None, :]), axis=(0, 1))
+    return np.mean(term1 - term2)
+
+def compute_coverage(samples, truth, alpha=0.9):
+    lower = np.quantile(samples, (1 - alpha) / 2, axis=0)
+    upper = np.quantile(samples, 1 - (1 - alpha) / 2, axis=0)
+    return np.mean((truth >= lower) & (truth <= upper))
 
 def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=20, input_dim=1,
                              num_windows=2, paths_per_window=2000, num_diffusion_timesteps=501):
 
-    sys.stdout.reconfigure(line_buffering=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(CONFIG.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
     print(f"🖥️ Using device: {device}")
 
     # Load model
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    ckpt = torch.load(checkpoint_path, map_location=device)
     model = ScoreTransformerNet(input_dim, history_len, predict_len).to(device)
-    model.load_state_dict(ckpt["score_net_state_dict"])
+    model.load_state_dict(ckpt["ema_score_net_state_dict"] if "ema_score_net_state_dict" in ckpt else ckpt["score_net_state_dict"])
     model.eval()
 
     sde = VPSDE()
 
-    # Load test data from rolled CSV [num_windows, window_len, 1]
-    data = load_csv_time_series(
-        csv_path=CONFIG["test_csv_path"],
-        history_len=history_len,
-        predict_len=predict_len,
-    ).to(device)  # shape [N_samples, window_len, 1]
+    # Load aligned test data
+    test_tensor = load_folder_as_tensor(CONFIG["test_data_path"])
+    if test_tensor is None or test_tensor.numel() == 0:
+        raise ValueError("❌ Test tensor is empty. Check your test data formatting and overlap.")
+    test_tensor = test_tensor.to(device)
 
-    save_dir = os.path.join(os.path.dirname(__file__), "Data", "Predictions")
-    os.makedirs(save_dir, exist_ok=True)
+    # Create test dataset and sample random windows
+    test_dataset = SlidingWindowDataset(test_tensor, history_len, predict_len, mask_prob=0.0)
+    indices = torch.randint(0, len(test_dataset), (num_windows,))
+    subset = Subset(test_dataset, indices.tolist())
+    loader = DataLoader(subset, batch_size=1, shuffle=False)
 
-    # Sample column indices (i.e. which windows)
-    col_indices = torch.randint(0, len(data), (num_windows,))
-    pd.Series(col_indices.cpu().numpy(), name="column_idx").to_csv(os.path.join(save_dir, "selected_window_columns.csv"), index=False)
-    print(f"✅ Saved selected column indices to: selected_window_columns.csv")
+    selected_histories, selected_futures = [], []
+    for hist, future in loader:
+        selected_histories.append(hist.squeeze(0))
+        selected_futures.append(future.squeeze(0))
 
-    selected_histories = data[col_indices, :history_len, :]
-    selected_futures = data[col_indices, history_len:, :]
+    selected_histories = torch.stack(selected_histories)
+    selected_futures = torch.stack(selected_futures)
 
     expanded_histories = selected_histories.unsqueeze(1).expand(-1, paths_per_window, -1, -1)
     expanded_histories = expanded_histories.reshape(-1, history_len, input_dim)
@@ -60,21 +74,24 @@ def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=20, inp
 
     x_pred_paths = x.cpu().view(num_windows, paths_per_window, predict_len)
 
-    all_metrics = []
+    # Save directory
+    save_dir = os.path.join(r'C:\Users\thoma\Desktop\Diffusion\Bitcoin model\Predictions')
+    os.makedirs(save_dir, exist_ok=True)
+
     fig, axes = plt.subplots(num_windows, 1, figsize=(14, 5 * num_windows))
     if num_windows == 1:
         axes = [axes]
 
-    initial_price = 100.0
+    all_metrics = []
 
-    for idx, (x_hist, x_true, ax) in enumerate(zip(selected_histories, selected_futures, axes)):
-        sample_paths = x_pred_paths[idx]
-        x_hist = x_hist.cpu().squeeze(-1)
-        x_true = x_true.cpu().squeeze(-1)
+    for i, (hist, true, ax) in enumerate(zip(selected_histories, selected_futures, axes)):
+        hist = hist.cpu().squeeze(-1)
+        true = true.cpu().squeeze(-1)
+        samples = x_pred_paths[i]
 
-        hist_price = initial_price * torch.exp(torch.cumsum(x_hist, dim=0))
-        true_price = hist_price[-1] * torch.exp(torch.cumsum(x_true, dim=0))
-        pred_prices = hist_price[-1] * torch.exp(torch.cumsum(sample_paths, dim=1))
+        hist_price = 100 * torch.exp(torch.cumsum(hist, dim=0))
+        true_price = hist_price[-1] * torch.exp(torch.cumsum(true, dim=0))
+        pred_prices = hist_price[-1] * torch.exp(torch.cumsum(samples, dim=1))
 
         q10 = torch.quantile(pred_prices, 0.10, dim=0)
         q90 = torch.quantile(pred_prices, 0.90, dim=0)
@@ -82,36 +99,77 @@ def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=20, inp
         q65 = torch.quantile(pred_prices, 0.65, dim=0)
 
         ax.plot(range(history_len), hist_price.numpy(), label="History", color="black")
-        ax.plot(range(history_len, history_len + predict_len), true_price.numpy(), label="True Future", linestyle="--", color="green")
+        ax.plot(range(history_len, history_len + predict_len), true_price.numpy(), label="True", linestyle="--", color="green")
         ax.fill_between(range(history_len, history_len + predict_len), q10.numpy(), q90.numpy(), color="lightblue", alpha=0.3, label="10–90% Quantile Band")
         ax.fill_between(range(history_len, history_len + predict_len), q35.numpy(), q65.numpy(), color="blue", alpha=0.2, label="35–65% Quantile Band")
-
-        ax.set_title(f"Sample {idx}")
+        ax.set_title(f"Sample {i}")
         ax.legend()
 
-        pred_mean = torch.mean(pred_prices, dim=0)
-        metrics = compute_all_metrics(pred=pred_mean, true=true_price, samples=pred_prices, alpha=0.9)
-        metrics["Sample"] = idx
-        all_metrics.append(metrics)
+        sample_dir = os.path.join(save_dir, f"sample_{i+1}")
+        os.makedirs(sample_dir, exist_ok=True)
+
+        np.save(os.path.join(sample_dir, "log_return_paths.npy"), samples.numpy())
+        price_paths = pred_prices.numpy()
+        np.save(os.path.join(sample_dir, "price_paths.npy"), price_paths)
+
+        pd.DataFrame({
+            "q10": q10.numpy(),
+            "q35": q35.numpy(),
+            "q65": q65.numpy(),
+            "q90": q90.numpy()
+        }).to_csv(os.path.join(sample_dir, "quantile_bands.csv"), index=False)
+
+        pred_mean = np.mean(price_paths, axis=0)
+        mae = mean_absolute_error(true_price.numpy(), pred_mean)
+        rmse = np.sqrt(mean_squared_error(true_price.numpy(), pred_mean))
+        crps = compute_crps(price_paths, true_price.numpy())
+        coverage = compute_coverage(price_paths, true_price.numpy(), alpha=0.9)
+
+        pd.DataFrame({
+            "pred_mean": pred_mean,
+            "true_price": true_price.numpy()
+        }).to_csv(os.path.join(sample_dir, "mean_vs_true.csv"), index=False)
+
+        pd.Series({
+            "MAE": mae,
+            "RMSE": rmse,
+            "CRPS": crps,
+            "90%_Coverage": coverage
+        }).to_csv(os.path.join(sample_dir, "metrics.csv"))
+
+        all_metrics.append({
+            "Sample": i,
+            "MAE": mae,
+            "RMSE": rmse,
+            "CRPS": crps,
+            "Coverage": coverage
+        })
 
     plt.tight_layout()
     fig_path = os.path.join(save_dir, "all_predictions.png")
     plt.savefig(fig_path)
     plt.close()
-    print(f"✅ Saved combined plot to: {fig_path}")
 
-    metrics_df = pd.DataFrame(all_metrics)
-    metrics_csv_path = os.path.join(save_dir, "prediction_metrics.csv")
-    metrics_df.to_csv(metrics_csv_path, index=False)
-    print(f"✅ Saved metrics CSV to: {metrics_csv_path}")
+    full_metrics = pd.DataFrame(all_metrics)
+    full_metrics.to_csv(os.path.join(save_dir, "all_metrics_summary.csv"), index=False)
+
+    fig, axs = plt.subplots(2, 2, figsize=(12, 8))
+    full_metrics[["MAE", "RMSE", "CRPS", "Coverage"]].hist(ax=axs.flatten(), bins=20, edgecolor='black')
+    for ax in axs.flatten():
+        ax.set_ylabel("Frequency")
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "metric_distributions.png"))
+    plt.close()
+
+    print(f"✅ Saved prediction plot and outputs to: {save_dir}")
 
 if __name__ == "__main__":
     predict_and_save_inline(
         checkpoint_path=CONFIG["checkpoint_path"],
         history_len=CONFIG["history_len"],
         predict_len=CONFIG["predict_len"],
-        input_dim=CONFIG["input_dim"],
+        input_dim=CONFIG.get("input_dim", 1),
         num_windows=5,
         paths_per_window=CONFIG["num_paths"],
-        num_diffusion_timesteps=CONFIG["num_diffusion_timesteps"],
+        num_diffusion_timesteps=CONFIG["num_diffusion_timesteps"]
     )

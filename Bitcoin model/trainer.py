@@ -2,45 +2,39 @@ import os
 import time
 import copy
 import torch
-import torch.nn.functional as F
-
-from torch.utils.data import DataLoader, TensorDataset
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from config import CONFIG
 from model import ScoreTransformerNet
 from sde import VPSDE
-from data import load_csv_time_series, generate_custom_series
+from data import SlidingWindowDataset, load_folder_as_tensor
 
 def update_ema(ema_model, model, decay):
     with torch.no_grad():
         for ema_param, param in zip(ema_model.parameters(), model.parameters()):
             ema_param.data.mul_(decay).add_(param.data, alpha=1 - decay)
 
-def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=64, lr=1e-3,
+def train(model, sde, dataset, history_len, predict_len, n_epochs=1000, batch_size=64, lr=1e-3,
           save_dir='checkpoints', checkpoint_freq=100, device="cuda", save_name="latest", ema_decay=0.999):
+
     os.makedirs(save_dir, exist_ok=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
     ema_model = copy.deepcopy(model)
     ema_model.eval()
 
-    x_history = data[:, :history_len, :].to(device)
-    x_future = data[:, history_len:, :].to(device)
-
-    dataset = TensorDataset(x_history, x_future)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-    global_bar = tqdm(range(n_epochs), desc="Training", ncols=100)
-    total_training_start = time.time()
-
     loss_history = []
+    global_bar = tqdm(range(n_epochs), desc="Training", ncols=100)
+    start_time = time.time()
 
     for epoch in global_bar:
-        total_loss = 0.0
         model.train()
+        total_loss = 0.0
 
         for hist, future in loader:
+            hist, future = hist.to(device), future.to(device)
             t = torch.rand(hist.size(0), device=device) * 0.998 + 0.001
             t_expand = t.unsqueeze(1).expand(-1, future.size(1))
 
@@ -49,12 +43,11 @@ def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=
             x_t = mean + std * noise
 
             score_pred = model(x_t, hist, t.unsqueeze(1))
-            loss = torch.mean(torch.pow(std * score_pred + noise, 2))
+            loss = torch.mean((std * score_pred + noise) ** 2)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             update_ema(ema_model, model, ema_decay)
 
             total_loss += loss.item()
@@ -64,77 +57,60 @@ def train(model, sde, data, history_len, predict_len, n_epochs=1000, batch_size=
         global_bar.set_postfix(loss=avg_loss)
 
         if (epoch + 1) % checkpoint_freq == 0 or (epoch + 1) == n_epochs:
-            latest_path = os.path.join(save_dir, f"{save_name}.pth")
             torch.save({
-                'score_net_state_dict': model.state_dict(),
-                'ema_score_net_state_dict': ema_model.state_dict()
-            }, latest_path)
+                "score_net_state_dict": model.state_dict(),
+                "ema_score_net_state_dict": ema_model.state_dict()
+            }, os.path.join(save_dir, f"{save_name}.pth"))
 
-    total_time = time.time() - total_training_start
-    print(f"\n✅ Training complete in {total_time:.2f} seconds ({total_time/60:.2f} min)")
+    duration = time.time() - start_time
+    print(f"✅ Training completed in {duration:.2f} sec ({duration/60:.2f} min)")
 
-    import matplotlib.pyplot as plt
     plt.figure(figsize=(8, 5))
-    plt.plot(loss_history, label="Training Loss")
+    plt.plot(loss_history)
+    plt.title("Training Loss Curve")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title("Training Loss Curve")
     plt.grid(True)
-    plt.legend()
-    loss_plot_path = os.path.join(save_dir, f"{save_name}_loss_curve.png")
-    plt.savefig(loss_plot_path)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"{save_name}_loss_curve.png"))
     plt.close()
-
-    print(f"📈 Saved training loss curve to: {loss_plot_path}")
 
 def train_model_from_config():
     device = CONFIG.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     print(f"🖥️ Using device: {device}")
 
-    if CONFIG.get("use_csv"):
-        data = load_csv_time_series(
-            csv_path=CONFIG["train_csv_path"],
-            history_len=CONFIG["history_len"],
-            predict_len=CONFIG["predict_len"],
-        )
-    elif CONFIG.get("use_synthetic"):
-        data = generate_custom_series(
-            n_samples=CONFIG["n_samples"],
-            total_seq_len=CONFIG["history_len"] + CONFIG["predict_len"],
-            input_dim=CONFIG["input_dim"],
-            sine_amplitude=CONFIG.get("sine_amplitude", 1.0),
-            sine_freq=CONFIG.get("sine_freq", 1.0),
-            slope=CONFIG.get("slope", 0.0),
-            trend_type=CONFIG.get("trend_type", "linear"),
-            noise_std=CONFIG.get("noise_std", 0.1),
-            constant_variance=CONFIG.get("constant_variance", True),
-            jumps=CONFIG.get("jumps", False),
-            seasonality=CONFIG.get("seasonality", False),
-        )
-    else:
-        raise ValueError("Specify either 'use_csv' or 'use_synthetic' in CONFIG.")
+    history_len = CONFIG["history_len"]
+    predict_len = CONFIG["predict_len"]
+
+    train_tensor = load_folder_as_tensor(CONFIG["train_data_path"])
+
+    print("🧪 Loaded train_tensor shape:", train_tensor.shape)
+
+    dataset = SlidingWindowDataset(
+        data_tensor=train_tensor,
+        history_len=history_len,
+        predict_len=predict_len,
+        mask_prob=CONFIG.get("mask_prob", 0.1)
+    )
 
     model = ScoreTransformerNet(
-        input_dim=CONFIG["input_dim"],
-        history_len=CONFIG["history_len"],
-        predict_len=CONFIG["predict_len"],
-        model_dim=CONFIG.get("model_dim", 256),
+        input_dim=train_tensor.shape[-1],
+        history_len=history_len,
+        predict_len=predict_len,
+        model_dim=CONFIG.get("model_dim", 256)
     ).to(device)
 
-    sde = VPSDE(bmin=0.1, bmax=20.0)
-
-    train(
-        model, sde, data,
-        history_len=CONFIG["history_len"],
-        predict_len=CONFIG["predict_len"],
-        n_epochs=CONFIG["n_epochs"],
-        batch_size=CONFIG["batch_size"],
-        lr=CONFIG["lr"],
-        save_dir=CONFIG["checkpoint_dir"],
-        checkpoint_freq=CONFIG["checkpoint_freq"],
-        save_name=CONFIG["save_name"],
-        device=device,
-    )
+    sde = VPSDE()
+    train(model, sde, dataset,
+          history_len=history_len,
+          predict_len=predict_len,
+          n_epochs=CONFIG["n_epochs"],
+          batch_size=CONFIG["batch_size"],
+          lr=CONFIG["lr"],
+          save_dir=CONFIG["checkpoint_dir"],
+          checkpoint_freq=CONFIG["checkpoint_freq"],
+          save_name=CONFIG["save_name"],
+          device=device)
 
 if __name__ == "__main__":
     train_model_from_config()
