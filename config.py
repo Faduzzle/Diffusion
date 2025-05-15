@@ -1,30 +1,43 @@
 import torch
 
 CONFIG = {
-    # ====== Paths ======
-    "train_data_folder": "./training_data",  # Folder with raw CSVs (for preprocessing)
-    "processed_dataset_path": "./processed_data/train_dataset.pt",  # Preprocessed .pt dataset
-    "checkpoint_dir": "./checkpoints",  # Folder where checkpoints will be saved
+    # === Time Window Settings ===
+    "history_len": 50,              # Max history length
+    "predict_len": 20,              # Max prediction length
 
-    # ====== Training Settings ======
-    "save_name": "multivariate_model_v1",  # Checkpoint base name during training
-    "batch_size": 128,
-    "n_epochs": 1000,
-    "learning_rate": 1e-4,
-    "checkpoint_freq": 50,  # Save checkpoint every N epochs
-
-    # ====== Model Settings ======
-    "history_len": 50,
-    "predict_len": 20,
-    "model_dim": 256,
+    # === Model Settings ===
+    "input_dim": 1,                 # Will be overwritten by data.shape[-1]
+    "latent_dim": 32,              # Latent space size
+    "model_dim": 256,              # Transformer model dimension
     "num_heads": 4,
     "num_layers": 4,
+
+    # === Training Settings ===
+    "n_epochs": 500,
+    "samples_per_epoch": 700,
+    "batch_size": 64,
+    "lr": 1e-3,
+    "ema_decay": 0.999,
+    "checkpoint_freq": 50,
+    "checkpoint_dir": "checkpoints",
+    "save_name": "latent_diff_model",
+
+    # === Data Paths ===
+    "train_data_path": r"C:\Users\thoma\Desktop\Diffusion\Bitcoin model\training data",
+    "test_data_path": r"C:\Users\thoma\Desktop\Diffusion\Bitcoin model\Testing Data",
+
+    # === Data Augmentation ===
+    "mask_prob": 0.01,
+
+    # === Classifier-Free Guidance ===
+    "cond_drop_prob": 0.1,
+    "classifier_free_guidance_weight": 2.0,
+
+    # === Inference Settings ===
+    "checkpoint_path": r"C:\Users\thoma\Desktop\Diffusion\Bitcoin model\checkpoints\latent_diff_model.pth",
     "num_diffusion_timesteps": 500,
+    "num_paths": 800,
 
-    # ====== Device ======
-    "device": "cuda" if torch.cuda.is_available() else "cpu",
-
-    # ====== Sampling Settings ======
-    "checkpoint_path": "./checkpoints/multivariate_model_v1_epoch1000.pth",  # Path to trained model checkpoint
-    "predictions_per_window": 1000,  # Number of samples per window during sampling
+    # === Device ===
+    "device": "cuda" if torch.cuda.is_available() else "cpu"
 }

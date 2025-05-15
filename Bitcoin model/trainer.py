@@ -29,6 +29,8 @@ def train(model, sde, dataset, history_len, predict_len, n_epochs=1000, batch_si
     global_bar = tqdm(range(n_epochs), desc="Training", ncols=100)
     start_time = time.time()
 
+    cond_drop_prob = CONFIG.get("cond_drop_prob", 0.1)
+
     for epoch in global_bar:
         model.train()
         total_loss = 0.0
@@ -42,7 +44,7 @@ def train(model, sde, dataset, history_len, predict_len, n_epochs=1000, batch_si
             noise = torch.randn_like(std)
             x_t = mean + std * noise
 
-            score_pred = model(x_t, hist, t.unsqueeze(1))
+            score_pred = model(x_t, hist, t.unsqueeze(1), cond_drop_prob=cond_drop_prob)
             loss = torch.mean((std * score_pred + noise) ** 2)
 
             optimizer.zero_grad()

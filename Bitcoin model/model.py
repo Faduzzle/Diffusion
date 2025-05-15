@@ -25,13 +25,12 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(length, self.dim, device=device)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        return pe.unsqueeze(0)  # [1, length, dim]
+        return pe.unsqueeze(0)
 
 class ScoreTransformerNet(nn.Module):
     def __init__(self, input_dim=1, history_len=50, predict_len=20,
                  model_dim=256, num_heads=4, num_layers=4):
         super().__init__()
-
         self.history_len = history_len
         self.predict_len = predict_len
 
@@ -53,11 +52,15 @@ class ScoreTransformerNet(nn.Module):
 
         self.output_proj = nn.Linear(model_dim, input_dim)
 
-    def forward(self, x_t, x_history, t):
+    def forward(self, x_t, x_history, t, cond_drop_prob=0.0):
         B, _, _ = x_t.shape
         device = x_t.device
 
-        t_embed = self.time_embed(t)  # [B, model_dim]
+        if self.training and cond_drop_prob > 0.0:
+            mask = (torch.rand(B, device=device) > cond_drop_prob).float().view(B, 1, 1)
+            x_history = x_history * mask
+
+        t_embed = self.time_embed(t)
         t_future = t_embed.unsqueeze(1).expand(-1, self.predict_len, -1)
         t_hist = t_embed.unsqueeze(1).expand(-1, self.history_len, -1)
 

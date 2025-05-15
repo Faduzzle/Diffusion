@@ -2,92 +2,150 @@ import torch
 import torch.nn as nn
 import math
 
+# === Time Embedding ===
 class TimeEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
-        self.linear1 = nn.Linear(1, dim)
-        self.act = nn.GELU()
-        self.linear2 = nn.Linear(dim, dim)
+        self.net = nn.Sequential(
+            nn.Linear(1, dim),
+            nn.GELU(),
+            nn.Linear(dim, dim)
+        )
 
     def forward(self, t):
-        t = self.linear1(t)
-        t = self.act(t)
-        t = self.linear2(t)
-        return t
+        return self.net(t)  # [B, dim]
 
-class LearnablePositionalEncoding(nn.Module):
-    def __init__(self, dim, max_len=1000):
+# === Positional Encoding ===
+class PositionalEncoding(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        self.pe = nn.Parameter(torch.randn(1, max_len, dim))
+        self.dim = dim
+
+    def forward(self, length, device):
+        position = torch.arange(0, length, dtype=torch.float, device=device).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.dim, 2, device=device).float() * (-math.log(10000.0) / self.dim))
+        pe = torch.zeros(length, self.dim, device=device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)
+
+# === Time Series Encoder ===
+class TimeSeriesEncoder(nn.Module):
+    def __init__(self, input_dim, latent_dim, hidden_dim=64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv1d(input_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv1d(hidden_dim, latent_dim, kernel_size=3, padding=1)
+        )
 
     def forward(self, x):
-        return x + self.pe[:, :x.size(1), :]
+        # x: [B, T, D] → [B, D, T] → conv → [B, L, T] → [B, T, L]
+        return self.net(x.permute(0, 2, 1)).permute(0, 2, 1)
 
-class CrossAttention(nn.Module):
-    def __init__(self, dim, num_heads=4):
+# === Time Series Decoder ===
+class TimeSeriesDecoder(nn.Module):
+    def __init__(self, latent_dim, output_dim, hidden_dim=64):
         super().__init__()
-        self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-
-    def forward(self, query, key, value):
-        out, _ = self.attn(query=query, key=key, value=value)
-        return out
-
-class ScoreTransformerNet(nn.Module):
-    def __init__(self, input_dim, history_len, predict_len, model_dim=256, num_heads=4, num_layers=4):
-        super().__init__()
-
-        self.input_dim = input_dim
-        self.history_len = history_len
-        self.predict_len = predict_len
-        self.total_len = history_len + predict_len
-
-        self.input_proj = nn.Linear(input_dim, model_dim)
-        self.time_embed = TimeEmbedding(model_dim)
-        self.pos_encoding = LearnablePositionalEncoding(model_dim, max_len=self.total_len)
-        self.token_type_embed = nn.Embedding(2, model_dim)
-        self.cross_attn = CrossAttention(model_dim, num_heads)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=model_dim,
-            nhead=num_heads,
-            dim_feedforward=4 * model_dim,
-            batch_first=True,
-            activation="gelu"
+        self.net = nn.Sequential(
+            nn.Conv1d(latent_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv1d(hidden_dim, output_dim, kernel_size=3, padding=1)
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        self.output_proj = nn.Linear(model_dim, input_dim)
+    def forward(self, z):
+        # z: [B, T, L] → [B, L, T] → conv → [B, D, T] → [B, T, D]
+        return self.net(z.permute(0, 2, 1)).permute(0, 2, 1)
 
-    def forward(self, x_t, x_history, t):
-        B = x_history.size(0)
+# === Cross Attention Block ===
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, model_dim, num_heads):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=model_dim, num_heads=num_heads, batch_first=True)
+        self.ffn = nn.Sequential(
+            nn.LayerNorm(model_dim),
+            nn.Linear(model_dim, 4 * model_dim),
+            nn.GELU(),
+            nn.Linear(4 * model_dim, model_dim),
+        )
+        self.norm = nn.LayerNorm(model_dim)
 
-        # Project inputs
-        h_embed = self.input_proj(x_history)         # [B, history_len, D]
-        x_embed = self.input_proj(x_t)               # [B, predict_len, D]
+    def forward(self, query, context):
+        attn_out, _ = self.attn(query, context, context)
+        out = self.norm(query + attn_out)
+        return out + self.ffn(out)
 
-        # Positional Encoding
-        h_embed = self.pos_encoding(h_embed)
-        x_embed = self.pos_encoding(x_embed)
+# === Transformer Score Network with Cross-Attention + Variance Head ===
+class ScoreTransformerNet(nn.Module):
+    def __init__(self, latent_dim=32, model_dim=256, num_heads=4, num_layers=4):
+        super().__init__()
 
-        # Time Embedding (only to future)
-        t_embed = self.time_embed(t).unsqueeze(1).expand(-1, self.predict_len, -1)
-        x_embed = x_embed + t_embed
+        self.input_proj = nn.Linear(latent_dim, model_dim)
+        self.time_embed = TimeEmbedding(model_dim)
+        self.pos_encoding = PositionalEncoding(model_dim)
+        self.concat_fuse = nn.Linear(3 * model_dim, model_dim)
 
-        # Token Type Embedding
-        h_type_ids = torch.zeros(B, self.history_len, dtype=torch.long, device=x_history.device)
-        x_type_ids = torch.ones(B, self.predict_len, dtype=torch.long, device=x_t.device)
-        h_embed = h_embed + self.token_type_embed(h_type_ids)
-        x_embed = x_embed + self.token_type_embed(x_type_ids)
+        self.encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=model_dim, nhead=num_heads,
+                                       dim_feedforward=4 * model_dim, batch_first=True),
+            num_layers=num_layers
+        )
 
-        # Cross Attention: future attends to history
-        x_embed = x_embed + self.cross_attn(x_embed, h_embed, h_embed)
+        self.cross_attn_blocks = nn.ModuleList([
+            CrossAttentionBlock(model_dim, num_heads) for _ in range(num_layers)
+        ])
 
-        # Concatenate and pass through transformer
-        tokens = torch.cat([h_embed, x_embed], dim=1)
-        tokens = self.transformer(tokens)
+        self.norm = nn.LayerNorm(model_dim)
+        self.output_proj = nn.Linear(model_dim, latent_dim)
+        self.output_var = nn.Linear(model_dim, latent_dim)
 
-        # Take only future tokens
-        future_encoded = tokens[:, self.history_len:, :]
-        score_pred = self.output_proj(future_encoded)
+    def forward(self, z_t, z_history, t, cond_drop_prob=0.0):
+        B, T_pred, _ = z_t.shape
+        T_hist = z_history.shape[1]
+        device = z_t.device
 
-        return score_pred
+        if self.training and cond_drop_prob > 0.0:
+            mask = (torch.rand(B, device=device) > cond_drop_prob).float().view(B, 1, 1)
+            z_history = z_history * mask
+
+        t_embed = self.time_embed(t)  # [B, model_dim]
+        t_future = t_embed.unsqueeze(1).expand(-1, T_pred, -1)
+        t_hist = t_embed.unsqueeze(1).expand(-1, T_hist, -1)
+
+        pe_future = self.pos_encoding(T_pred, device).expand(B, -1, -1)
+        pe_hist = self.pos_encoding(T_hist, device).expand(B, -1, -1)
+
+        z_future = self.input_proj(z_t)
+        z_hist = self.input_proj(z_history)
+
+        z_future = torch.cat([z_future, t_future, pe_future], dim=-1)
+        z_hist = torch.cat([z_hist, t_hist, pe_hist], dim=-1)
+
+        z_future = self.concat_fuse(z_future)
+        z_hist = self.concat_fuse(z_hist)
+
+        encoded_history = self.encoder(z_hist)
+
+        for block in self.cross_attn_blocks:
+            z_future = block(z_future, encoded_history)
+
+        out = self.norm(z_future)
+        return self.output_proj(out), self.output_var(out)
+
+# === Full Latent Diffusion Model ===
+class LatentDiffusionModel(nn.Module):
+    def __init__(self, input_dim, latent_dim=32, model_dim=256,
+                 num_heads=4, num_layers=4):
+        super().__init__()
+        self.encoder = TimeSeriesEncoder(input_dim, latent_dim)
+        self.decoder = TimeSeriesDecoder(latent_dim, input_dim)
+        self.score_net = ScoreTransformerNet(latent_dim, model_dim, num_heads, num_layers)
+
+    def forward(self, x_t, x_history, t, cond_drop_prob=0.0):
+        z_t = self.encoder(x_t)
+        z_history = self.encoder(x_history)
+        score, variance = self.score_net(z_t, z_history, t, cond_drop_prob)
+        return score, variance
+
+    def decode(self, z):
+        return self.decoder(z)

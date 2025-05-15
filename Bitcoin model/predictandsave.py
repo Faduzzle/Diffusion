@@ -29,6 +29,8 @@ def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=20, inp
     device = torch.device(CONFIG.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
     print(f"🖥️ Using device: {device}")
 
+    guidance_w = CONFIG.get("classifier_free_guidance_weight", 2.0)
+
     # Load model
     ckpt = torch.load(checkpoint_path, map_location=device)
     model = ScoreTransformerNet(input_dim, history_len, predict_len).to(device)
@@ -67,7 +69,12 @@ def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=20, inp
         for i in tqdm(range(num_diffusion_timesteps - 1, -1, -1), desc="Sampling all windows"):
             t_val = max(i / num_diffusion_timesteps, 1e-5)
             t = torch.full((x.size(0), 1), t_val, device=device)
-            score = model(x, expanded_histories, t)
+
+            # Classifier-Free Guidance blending
+            score_cond = model(x, expanded_histories, t, cond_drop_prob=0.0)
+            score_uncond = model(x, torch.zeros_like(expanded_histories), t, cond_drop_prob=0.0)
+            score = (1 + guidance_w) * score_cond - guidance_w * score_uncond
+
             drift = sde.f(x, t) - (sde.g(t) ** 2) * score
             z = torch.randn_like(x)
             x = x + drift * dt + sde.g(t) * ((-dt) ** 0.5) * z

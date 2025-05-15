@@ -1,177 +1,147 @@
-# ========= IMPORTS =========
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-
 import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from torch.utils.data import Subset, DataLoader
 
-from config import CONFIG
-from data import load_processed_dataset
-from model import ScoreTransformerNet
+from model import LatentDiffusionModel
 from sde import VPSDE
+from config import CONFIG
+from data import load_folder_as_tensor, SlidingWindowDataset
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# ========= SMALL FIX =========
-os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
+def compute_crps(samples, truth):
+    N = samples.shape[0]
+    term1 = np.mean(np.abs(samples - truth), axis=0)
+    term2 = 0.5 * np.mean(np.abs(samples[:, None] - samples[None, :]), axis=(0, 1))
+    return np.mean(term1 - term2)
 
-# ========= METRICS =========
+def compute_coverage(samples, truth, alpha=0.9):
+    lower = np.quantile(samples, (1 - alpha) / 2, axis=0)
+    upper = np.quantile(samples, 1 - (1 - alpha) / 2, axis=0)
+    return np.mean((truth >= lower) & (truth <= upper))
 
-def compute_metrics(y_true, y_pred):
-    mae = torch.mean(torch.abs(y_true - y_pred)).item()
-    rmse = torch.sqrt(torch.mean((y_true - y_pred) ** 2)).item()
-    mse = torch.mean((y_true - y_pred) ** 2).item()
-    mape = (torch.mean(torch.abs((y_true - y_pred) / (y_true + 1e-8))) * 100).item()
-    return {
-        "MAE": mae,
-        "RMSE": rmse,
-        "MSE": mse,
-        "MAPE (%)": mape
-    }
+def predict_and_save_inline(checkpoint_path, history_len=50, predict_len=20, input_dim=1,
+                             num_windows=2, paths_per_window=2000, num_diffusion_timesteps=501):
 
-# ========= SAMPLING FUNCTION =========
+    device = torch.device(CONFIG.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+    print(f"🖥️ Using device: {device}")
 
-@torch.no_grad()
-def sample_predictions(model, sde, x_history, t_steps, n_samples):
-    model.eval()
-    device = x_history.device
-    predict_len = CONFIG["predict_len"]
-    input_dim = x_history.size(-1)
-
-    x = torch.randn(n_samples, predict_len, input_dim, device=device)
-
-    for t in t_steps:
-        t_batch = torch.ones(n_samples, 1, device=device) * t
-
-        alpha = sde.alpha(t_batch)
-        sigma = torch.sqrt(1.0 - alpha ** 2)
-
-        score = model(x, x_history.expand(n_samples, -1, -1), t_batch)
-
-        noise = torch.randn_like(x) if t > 0 else 0.0
-        x = (x + sigma * score) / alpha + sigma * noise
-
-    return x
-
-# ========= PLOTTING FUNCTION =========
-
-def plot_feature(time_idx, true_future, pred_samples, feature_idx, window_idx, save_dir):
-    """
-    Plot a single feature with confidence intervals.
-    """
-    pred_mean = pred_samples.mean(dim=0)[:, feature_idx]
-    pred_std = pred_samples.std(dim=0)[:, feature_idx]
-
-    ci_99 = 2.576 * pred_std
-    ci_75 = 1.150 * pred_std
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    time_idx_future = time_idx[-CONFIG["predict_len"]:]
-
-    ax.plot(time_idx_future, true_future[:, feature_idx].cpu(), label="True", linestyle='-', marker='o')
-    ax.plot(time_idx_future, pred_mean.cpu(), label="Pred Mean", linestyle='--')
-
-    ax.fill_between(time_idx_future,
-                    (pred_mean - ci_75).cpu(),
-                    (pred_mean + ci_75).cpu(),
-                    alpha=0.3, label="75% CI")
-
-    ax.fill_between(time_idx_future,
-                    (pred_mean - ci_99).cpu(),
-                    (pred_mean + ci_99).cpu(),
-                    alpha=0.1, label="99% CI")
-
-    ax.set_title(f"Window {window_idx} - Feature {feature_idx}")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Normalized Value")
-    ax.legend()
-
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(os.path.join(save_dir, f"window{window_idx}_feature{feature_idx}.png"))
-    plt.close()
-
-# ========= MAIN SCRIPT =========
-
-if __name__ == "__main__":
-    # Load config
-    checkpoint_path = CONFIG["checkpoint_path"]
-    predictions_per_window = CONFIG["predictions_per_window"]
-    save_name = CONFIG["save_name"]
-
-    # Setup output paths
-    output_dir = "./Model_Output"
-    os.makedirs(output_dir, exist_ok=True)
-    result_csv_path = os.path.join(output_dir, f"{save_name}_results.csv")
-    plot_dir = os.path.join(output_dir, f"{save_name}_plots")
-    os.makedirs(plot_dir, exist_ok=True)
-
-    # Load dataset
-    windows, norm_params, normalization_mode, timestamp = load_processed_dataset(CONFIG["processed_dataset_path"])
-    test_windows = windows
+    guidance_w = CONFIG.get("classifier_free_guidance_weight", 2.0)
 
     # Load model
-    input_dim = test_windows.shape[-1]
-    model = ScoreTransformerNet(
-        input_dim=input_dim,
-        history_len=CONFIG["history_len"],
-        predict_len=CONFIG["predict_len"],
-        model_dim=CONFIG["model_dim"],
-        num_heads=CONFIG["num_heads"],
-        num_layers=CONFIG["num_layers"],
-    ).to(CONFIG["device"])
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    model = LatentDiffusionModel(input_dim, latent_dim=CONFIG.get("latent_dim", 32),
+                                 model_dim=CONFIG.get("model_dim", 256)).to(device)
+    model.load_state_dict(ckpt.get("ema_score_net_state_dict", ckpt["score_net_state_dict"]))
+    model.eval()
 
-    checkpoint = torch.load(checkpoint_path, map_location=CONFIG["device"])
-    model.load_state_dict(checkpoint["model_state_dict"])
-
-    # Load diffusion
     sde = VPSDE()
 
-    # Sample 3 random windows
-    chosen_indices = torch.randint(0, test_windows.shape[0], (3,))
-    print(f"📈 Sampling windows: {chosen_indices.tolist()}")
+    # Load test data
+    test_tensor = load_folder_as_tensor(CONFIG["test_data_path"]).to(device)
+    test_dataset = SlidingWindowDataset(test_tensor, history_len, predict_len, mask_prob=0.0, dynamic_len=False)
 
-    # Prepare to store all metrics
-    all_metrics = []
+    indices = torch.randint(0, len(test_dataset), (num_windows,))
+    loader = DataLoader(Subset(test_dataset, indices.tolist()), batch_size=1, shuffle=False)
 
-    for idx, window_idx in enumerate(chosen_indices):
-        window = test_windows[window_idx]
-        x_history = window[:CONFIG["history_len"], :].unsqueeze(0).to(CONFIG["device"])
-        true_future = window[CONFIG["history_len"]:, :]
+    selected_histories, selected_futures = [], []
+    for hist, fut, *_ in loader:
+        selected_histories.append(hist.squeeze(0))
+        selected_futures.append(fut.squeeze(0))
 
-        t_steps = torch.linspace(1.0, 0.0, steps=CONFIG["num_diffusion_timesteps"], device=CONFIG["device"])
-        pred_samples = sample_predictions(model, sde, x_history, t_steps, predictions_per_window)
+    selected_histories = torch.stack(selected_histories).to(device)  # [B, H, D]
+    selected_futures = torch.stack(selected_futures).to(device)      # [B, P, D]
 
-        time_idx = torch.arange(window.shape[0])
+    B, H, D = selected_histories.shape
+    P = predict_len
 
-        # For each feature separately
-        for feature_idx in range(input_dim):
-            feature_save_dir = os.path.join(plot_dir, f"window{window_idx}_feature{feature_idx}")
-            plot_feature(time_idx, true_future, pred_samples, feature_idx, window_idx, feature_save_dir)
+    # Encode histories
+    expanded_histories = selected_histories.unsqueeze(1).expand(-1, paths_per_window, -1, -1)
+    expanded_histories = expanded_histories.reshape(-1, H, D)
+    z_hist = model.encoder(expanded_histories)
 
-            # Compute metrics for this feature
-            pred_mean = pred_samples.mean(dim=0)[:, feature_idx]
-            metrics = compute_metrics(true_future[:, feature_idx].to(pred_mean.device), pred_mean)
+    # Latent noise initialization
+    z = torch.randn((num_windows * paths_per_window, P, model.score_net.output_proj.out_features), device=device)
+    dt = -1.0 / num_diffusion_timesteps
 
-            # Add metadata
-            metrics["Window_Index"] = int(window_idx.item())
-            metrics["Feature_Index"] = int(feature_idx)
-            all_metrics.append(metrics)
+    with torch.no_grad():
+        for i in tqdm(range(num_diffusion_timesteps - 1, -1, -1), desc="Sampling in latent space"):
+            t_val = max(i / num_diffusion_timesteps, 1e-5)
+            t = torch.full((z.size(0), 1), t_val, device=device)
 
-            # Print Metrics
-            print(f"\n📋 Metrics for Window {window_idx} - Feature {feature_idx}:")
-            for k, v in metrics.items():
-                if k not in ("Window_Index", "Feature_Index"):
-                    print(f"{k}: {v:.6f}")
-            print("\n" + "="*40 + "\n")
+            score_cond, _ = model.score_net(z, z_hist, t, cond_drop_prob=0.0)
+            score_uncond, _ = model.score_net(z, torch.zeros_like(z_hist), t, cond_drop_prob=0.0)
+            score = (1 + guidance_w) * score_cond - guidance_w * score_uncond
 
-    # Save/Append Results CSV
-    new_results = pd.DataFrame(all_metrics)
-    if os.path.exists(result_csv_path):
-        existing_results = pd.read_csv(result_csv_path)
-        final_results = pd.concat([existing_results, new_results], ignore_index=True)
-    else:
-        final_results = new_results
+            drift = sde.f(z, t) - (sde.g(t) ** 2) * score
+            z = z + drift * dt + sde.g(t) * ((-dt) ** 0.5) * torch.randn_like(z)
 
-    final_results.to_csv(result_csv_path, index=False)
-    print(f"✅ Saved evaluation results to {result_csv_path}")
+    # Decode latent predictions
+    z_final = z.view(num_windows * paths_per_window, P, -1)
+    x_pred = model.decode(z_final).cpu().view(num_windows, paths_per_window, P, D)
+
+    # Save outputs
+    save_dir = os.path.join(r'C:\Users\thoma\Desktop\Diffusion\Bitcoin model\Predictions')
+    os.makedirs(save_dir, exist_ok=True)
+
+    for i in range(num_windows):
+        hist = selected_histories[i].cpu().numpy()
+        true = selected_futures[i].cpu().numpy()
+        preds = x_pred[i].numpy()
+
+        sample_dir = os.path.join(save_dir, f"sample_{i+1}")
+        os.makedirs(sample_dir, exist_ok=True)
+
+        np.save(os.path.join(sample_dir, "pred_paths.npy"), preds)
+        np.save(os.path.join(sample_dir, "history.npy"), hist)
+        np.save(os.path.join(sample_dir, "truth.npy"), true)
+
+        # Basic plot for first dimension
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(range(H), hist[:, 0], label="History", color="black")
+        ax.plot(range(H, H + P), true[:, 0], label="True", linestyle="--", color="green")
+
+        quantiles = {
+            "q10": np.quantile(preds[:, :, 0], 0.10, axis=0),
+            "q35": np.quantile(preds[:, :, 0], 0.35, axis=0),
+            "q65": np.quantile(preds[:, :, 0], 0.65, axis=0),
+            "q90": np.quantile(preds[:, :, 0], 0.90, axis=0),
+        }
+
+        ax.fill_between(range(H, H + P), quantiles["q10"], quantiles["q90"], color="lightblue", alpha=0.3, label="10–90%")
+        ax.fill_between(range(H, H + P), quantiles["q35"], quantiles["q65"], color="blue", alpha=0.2, label="35–65%")
+        ax.legend()
+        ax.set_title(f"Sample {i+1}")
+        plt.tight_layout()
+        plt.savefig(os.path.join(sample_dir, "forecast_plot.png"))
+        plt.close()
+
+        # Save metrics
+        pred_mean = preds[:, :, 0].mean(axis=0)
+        mae = mean_absolute_error(true[:, 0], pred_mean)
+        rmse = np.sqrt(mean_squared_error(true[:, 0], pred_mean))
+        crps = compute_crps(preds[:, :, 0], true[:, 0])
+        coverage = compute_coverage(preds[:, :, 0], true[:, 0], alpha=0.9)
+
+        pd.Series({
+            "MAE": mae,
+            "RMSE": rmse,
+            "CRPS": crps,
+            "90%_Coverage": coverage
+        }).to_csv(os.path.join(sample_dir, "metrics.csv"))
+
+    print(f"✅ Saved predictions to: {save_dir}")
+
+if __name__ == "__main__":
+    predict_and_save_inline(
+        checkpoint_path=CONFIG["checkpoint_path"],
+        history_len=CONFIG["history_len"],
+        predict_len=CONFIG["predict_len"],
+        input_dim=CONFIG.get("input_dim", 1),
+        num_windows=5,
+        paths_per_window=CONFIG["num_paths"],
+        num_diffusion_timesteps=CONFIG["num_diffusion_timesteps"]
+    )

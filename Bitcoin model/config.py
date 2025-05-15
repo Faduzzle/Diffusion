@@ -23,7 +23,7 @@ CONFIG = {
     "test_data_path": r"C:\Users\thoma\Desktop\Diffusion\Bitcoin model\Testing Data",
 
     # === Data Augmentation ===
-    "mask_prob": 0.01,
+    "mask_prob": 0.05,
 
     # === Device ===
     "device": "cuda" if torch.cuda.is_available() else "cpu",
@@ -32,4 +32,8 @@ CONFIG = {
     "checkpoint_path": r"C:\Users\thoma\Desktop\Diffusion\Bitcoin model\checkpoints\diffusion_model.pth",
     "num_diffusion_timesteps": 500,
     "num_paths": 800,
+
+    # === Classifier-Free Guidance ===
+    "cond_drop_prob": 0.1,
+    "classifier_free_guidance_weight": 3.0,
 }
