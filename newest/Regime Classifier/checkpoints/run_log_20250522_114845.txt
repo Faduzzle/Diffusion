@@ -1,0 +1,7 @@
+
+🚀 Training Diffusion Model...
+
+📊 Generating Diffusion Model Predictions...
+🌊 Using wavelet decomposition for predictions
+
+❌ Error during execution: 'dict' object has no attribute 'eval'

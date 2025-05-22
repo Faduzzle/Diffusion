@@ -1,0 +1,4 @@
+
+🚀 Training Diffusion Model...
+
+❌ Error during execution: Index put requires the source and destination dtypes match, got Half for the destination and Float for the source.

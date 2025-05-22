@@ -1,0 +1,22 @@
+
+🚀 Training Diffusion Model...
+
+❌ Error during execution: Caught AttributeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "C:\Users\thoma\anaconda3\envs\MachineLearning\Lib\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\thoma\anaconda3\envs\MachineLearning\Lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "c:\Users\thoma\Desktop\Regime Classifier\Bitcoin model\data.py", line 89, in __getitem__
+    hist_w = self._decompose_window(hist)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\thoma\Desktop\Regime Classifier\Bitcoin model\data.py", line 97, in _decompose_window
+    coeffs = modwt_decompose(arr[:, d], self.wavelet, self.level)  # (level+1, T)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\thoma\Desktop\Regime Classifier\Bitcoin model\wavelet_utils.py", line 12, in modwt_decompose
+    coeffs = pywt.modwt(x, wavelet, level=level)
+             ^^^^^^^^^^
+AttributeError: module 'pywt' has no attribute 'modwt'. Did you mean: '_dwt'?
+
