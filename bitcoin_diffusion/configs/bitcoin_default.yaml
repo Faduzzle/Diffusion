@@ -1,0 +1,82 @@
+# Default configuration for Bitcoin diffusion model
+
+model:
+  type: "DiffusionTransformer"
+  input_dim: 1              # Univariate time series (returns)
+  model_dim: 256            # Hidden dimension
+  num_heads: 8              # Number of attention heads
+  num_layers: 6             # Number of transformer layers
+  ff_dim: 1024              # Feed-forward dimension
+  history_len: 252          # ~1 year of trading days
+  predict_len: 21           # ~1 month ahead prediction
+  dropout: 0.1              # Dropout rate
+  cond_drop_prob: 0.1       # Classifier-free guidance dropout
+  use_latent: false         # Whether to use latent diffusion
+
+sde:
+  type: "vpsde"             # SDE type (vpsde, vesde, subvpsde)
+  beta_min: 0.1             # Minimum beta value
+  beta_max: 20.0            # Maximum beta value
+
+training:
+  batch_size: 32            # Training batch size
+  learning_rate: 1e-4       # Initial learning rate
+  min_lr: 1e-6              # Minimum learning rate for cosine schedule
+  weight_decay: 0.01        # AdamW weight decay
+  betas: [0.9, 0.999]       # Adam beta parameters
+  num_epochs: 100           # Number of training epochs
+  gradient_clip: 1.0        # Gradient clipping value
+  use_ema: true             # Use exponential moving average
+  ema_decay: 0.999          # EMA decay rate
+  loss_weight_type: "uniform"  # Loss weighting (uniform, importance, likelihood)
+  num_workers: 4            # DataLoader workers
+  device: "cuda"            # Training device (cuda, cpu)
+  checkpoint_dir: "models/checkpoints"  # Checkpoint directory
+
+data:
+  # Data paths (to be filled by preprocessing script)
+  train_path: "data/processed/bitcoin_train.pt"
+  val_path: "data/processed/bitcoin_val.pt"
+  test_path: "data/processed/bitcoin_test.pt"
+  
+  # Preprocessing options
+  norm_method: "standard"   # Normalization method (standard, minmax, robust, max, none)
+  returns_method: "log"     # Returns calculation (log, simple)
+  fill_method: "ffill"      # Missing value filling (ffill, bfill, interpolate)
+  
+  # Feature engineering
+  include_volatility: true  # Include rolling volatility
+  volatility_window: 21     # Window for volatility calculation
+  include_technical: false  # Include technical indicators
+  
+  # Dataset options
+  dataset:
+    stride: 1               # Stride between windows
+    mask_prob: 0.0          # Probability of masking history
+    max_samples: null       # Maximum samples (null for all)
+
+evaluation:
+  num_samples: 100          # Number of trajectories to generate
+  num_steps: 1000           # Number of diffusion steps
+  solver: "euler"           # ODE solver (euler, heun, dpm)
+  guidance_scale: 1.0       # Classifier-free guidance scale
+  
+  # Metrics to compute
+  metrics:
+    - "mse"                 # Mean squared error
+    - "mae"                 # Mean absolute error
+    - "sharpe"              # Sharpe ratio
+    - "directional"         # Directional accuracy
+    - "quantile"            # Quantile coverage
+
+visualization:
+  plot_samples: 5           # Number of sample trajectories to plot
+  confidence_levels: [0.1, 0.25, 0.75, 0.9]  # Confidence intervals
+  figure_size: [12, 6]      # Figure size for plots
+  dpi: 100                  # Figure DPI
+
+# Experiment tracking
+experiment:
+  name: "bitcoin_diffusion_baseline"
+  tags: ["bitcoin", "diffusion", "transformer"]
+  notes: "Baseline Bitcoin price diffusion model with standard configuration"
