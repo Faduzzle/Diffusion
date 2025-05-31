@@ -1,0 +1,23 @@
+{
+  "processed_date": "2025-05-31T15:05:02.911298",
+  "config": {
+    "norm_method": "standard",
+    "returns_method": "log",
+    "fill_method": "ffill"
+  },
+  "normalization": {
+    "method": "standard",
+    "params": {
+      "mean": [
+        [
+          -0.001622015843167901
+        ]
+      ],
+      "std": [
+        [
+          0.03888098895549774
+        ]
+      ]
+    }
+  }
+}

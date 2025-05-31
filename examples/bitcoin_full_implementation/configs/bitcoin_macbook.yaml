@@ -19,15 +19,15 @@ sde:
   beta_max: 20.0            
 
 training:
-  batch_size: 16            # Smaller batch for MPS memory
-  learning_rate: 0.0002     # Slightly higher LR for faster convergence
-  min_lr: 0.000001              
+  batch_size: 32            # Larger batch for stability
+  learning_rate: 0.0001     # Lower LR for stability
+  min_lr: 0.00001           # Higher min LR              
   weight_decay: 0.01        
-  betas: [0.9, 0.999]       
-  num_epochs: 30            # Moderate epochs for MacBook
-  gradient_clip: 1.0        
+  betas: [0.9, 0.95]        # More conservative beta2
+  num_epochs: 100           # More epochs for convergence
+  gradient_clip: 0.5        # Lower gradient clipping
   use_ema: true             
-  ema_decay: 0.999          
+  ema_decay: 0.9999         # Higher EMA decay
   loss_weight_type: "uniform"
   num_workers: 2            # MPS works well with 2 workers
   device: "auto"            # Will auto-select MPS on MacBook

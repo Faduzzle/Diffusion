@@ -1,0 +1,159 @@
+# Bitcoin Price Diffusion Model Configuration
+# This preserves the original Bitcoin diffusion functionality in the new framework
+
+name: bitcoin_diffusion
+description: |
+  Diffusion model for Bitcoin price prediction using historical data.
+  Predicts 1 month ahead using 1 year of history with log returns preprocessing.
+
+tags:
+  - bitcoin
+  - cryptocurrency
+  - financial
+  - time-series
+
+components:
+  preprocessing:
+    type: log_returns
+    params:
+      normalize: true
+      epsilon: 1e-8
+  
+  architecture:
+    type: transformer
+    params:
+      input_dim: 1
+      model_dim: 256
+      num_heads: 8
+      num_layers: 6
+      ff_dim: 1024
+      dropout: 0.1
+      cond_drop_prob: 0.1
+      attention_type: full
+  
+  sde:
+    type: vpsde
+    params:
+      beta_min: 0.1
+      beta_max: 20.0
+  
+  objective:
+    type: score_matching
+    params:
+      loss_weight_type: uniform
+  
+  sampler:
+    type: euler
+    params:
+      corrector: none
+
+noise:
+  type: standard
+  params:
+    schedule: linear
+
+data:
+  dataset: bitcoin
+  data_path: data/bitcoin_prices.csv  # Update with your data path
+  history_len: 252  # ~1 year of trading days
+  predict_len: 21   # ~1 month ahead
+  
+  # Data split
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  
+  # Preprocessing
+  price_column: Close
+  date_column: Date
+  
+  # Dataset options
+  stride: 1
+  max_samples: null  # Use all data
+
+training:
+  batch_size: 32
+  learning_rate: 1e-4
+  min_lr: 1e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  num_epochs: 100
+  
+  # Optimization
+  gradient_clip: 1.0
+  use_ema: true
+  ema_decay: 0.999
+  
+  # Learning rate schedule
+  scheduler: cosine
+  warmup_epochs: 5
+  
+  # Regularization
+  dropout: 0.1
+  label_smoothing: 0.0
+  
+  # Efficiency
+  mixed_precision: false
+  gradient_checkpointing: false
+  
+  # Hardware
+  device: auto  # auto, cuda, mps, cpu
+  num_workers: 4
+  
+  # Checkpointing
+  save_every: 10
+  save_best: true
+  patience: 20
+
+evaluation:
+  num_samples: 100
+  num_steps: 1000
+  
+  # Sampling
+  solver: euler
+  guidance_scale: 2.0  # Classifier-free guidance
+  
+  # Metrics
+  metrics:
+    - mse
+    - mae
+    - rmse
+    - mape
+    - sharpe_ratio
+    - directional_accuracy
+    - quantile_coverage
+    - crps  # Continuous Ranked Probability Score
+  
+  # Visualization
+  plot_samples: 5
+  confidence_levels: [0.1, 0.25, 0.75, 0.9]
+  
+  # Backtesting
+  backtest: true
+  transaction_cost: 0.001  # 0.1%
+  initial_capital: 10000
+
+output:
+  output_dir: experiments/bitcoin/${name}_${timestamp}
+  
+  # What to save
+  save_model: true
+  save_predictions: true
+  save_metrics: true
+  save_visualizations: true
+  
+  # Formats
+  model_format: pytorch  # pytorch, onnx
+  prediction_format: csv
+  
+  # Logging
+  log_level: INFO
+  use_tensorboard: true
+  use_wandb: false
+
+metadata:
+  author: "Time Series Diffusion Framework"
+  version: "1.0.0"
+  notes: |
+    This configuration replicates the original Bitcoin diffusion model
+    in the new modular framework. Adjust paths and parameters as needed.

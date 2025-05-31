@@ -2,26 +2,31 @@
 
 ## 🚀 Quick Start for MacBook
 
+First, navigate to the main project directory:
+```bash
+cd Diffusion-1
+```
+
 ### Option 1: MacBook-Optimized Training (Recommended)
 ```bash
-python train_bitcoin.py --macbook
+python scripts/train_bitcoin.py --macbook
 ```
 
 ### Option 2: Standard CFG Training
 ```bash
-python train_bitcoin.py --cfg-experiment
+python scripts/train_bitcoin.py --cfg-experiment
 ```
 
 ### Option 3: Default Training
 ```bash
-python train_bitcoin.py
+python scripts/train_bitcoin.py
 ```
 
 ## 📍 Configuration File Locations
 
 ### Main Config Directory:
 ```
-bitcoin_diffusion/configs/
+examples/bitcoin_full_implementation/configs/
 ├── bitcoin_default.yaml         # Standard configuration
 ├── bitcoin_cfg_experiment.yaml  # CFG research configuration  
 └── bitcoin_macbook.yaml         # MacBook MPS-optimized (NEW!)
@@ -32,7 +37,7 @@ bitcoin_diffusion/configs/
 ### 1. **Quick Edits** (most common):
 Navigate to the config file and edit:
 ```bash
-cd bitcoin_diffusion/configs/
+cd Diffusion-1/examples/bitcoin_full_implementation/configs/
 nano bitcoin_macbook.yaml        # or use your preferred editor
 ```
 
@@ -106,12 +111,13 @@ training:
 
 Create your own config file:
 ```bash
-cp bitcoin_diffusion/configs/bitcoin_macbook.yaml bitcoin_diffusion/configs/my_config.yaml
+cp examples/bitcoin_full_implementation/configs/bitcoin_macbook.yaml \
+   examples/bitcoin_full_implementation/configs/my_config.yaml
 ```
 
 Then edit and use:
 ```bash
-cd bitcoin_diffusion
+cd Diffusion-1/examples/bitcoin_full_implementation
 python scripts/train.py --config configs/my_config.yaml
 ```
 

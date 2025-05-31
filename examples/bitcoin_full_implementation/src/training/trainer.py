@@ -170,35 +170,66 @@ class DiffusionTrainer:
         # Predict score with potential conditioning dropout
         score_pred = self.model(x_t, x_history, t, cond_drop_mask)
         
-        # Compute target score
-        _, std = self.sde.transition_kernel(x_future, t)
-        score_target = -noise / (std.view(-1, *([1] * (noise.dim() - 1))) + 1e-5)
+        # Compute target for score-based diffusion: ||sigma_t * score + z||^2
+        mean, std = self.sde.transition_kernel(x_future, t)
+        # Standard formulation: model predicts score S(x,t), target is -z
+        std_expanded = std.view(-1, *([1] * (noise.dim() - 1)))
+        score_target = -noise  # Target is negative of sampled z ~ N(0,1)
         
-        # Loss weighting
+        # Apply the score-based loss: ||sigma_t * score_pred + z||^2
+        # This is equivalent to ||score_pred - (-z/sigma_t)||^2 * sigma_t^2
+        scaled_pred = std_expanded * score_pred
+        scaled_target = -noise  # This is -z
+        
+        # Loss weighting for stability
         if self.loss_weight_type == 'uniform':
             weight = 1.0
         elif self.loss_weight_type == 'importance':
-            weight = std.view(-1, *([1] * (noise.dim() - 1)))
+            # Weight by inverse variance for importance sampling
+            weight = 1.0 / (std_expanded ** 2 + 1e-8)
         elif self.loss_weight_type == 'likelihood':
-            weight = self.sde.g(t).view(-1, *([1] * (noise.dim() - 1))) ** 2
+            # Weight by g(t)^2 for likelihood weighting
+            g_t = self.sde.g(t).view(-1, *([1] * (noise.dim() - 1)))
+            weight = g_t ** 2
         else:
             weight = 1.0
         
-        # Compute weighted MSE loss
-        loss = torch.mean(weight * (score_pred - score_target) ** 2)
+        # Compute the score-based loss: ||sigma_t * score + z||^2
+        mse_loss = (scaled_pred + noise) ** 2
+        
+        # Apply loss clipping to prevent exploding losses
+        mse_loss = torch.clamp(mse_loss, max=100.0)  # Clip very large losses
+        
+        loss = torch.mean(weight * mse_loss)
         
         # Compute metrics
         with torch.no_grad():
+            # Check for problematic values
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"WARNING: Loss is {loss.item()}, skipping batch")
+                return torch.tensor(0.0, device=self.device, requires_grad=True), {'loss': 0.0}
+            
             metrics = {
                 'loss': loss.item(),
-                'score_norm': score_pred.norm(dim=-1).mean().item(),
-                'target_norm': score_target.norm(dim=-1).mean().item(),
-                'noise_level': std.mean().item(),
+                'score_pred_norm': score_pred.norm(dim=-1).mean().item(),
+                'score_target_norm': score_target.norm(dim=-1).mean().item(),
+                'score_pred_max': score_pred.abs().max().item(),
+                'score_target_max': score_target.abs().max().item(),
+                'noise_level_mean': std.mean().item(),
+                'noise_level_max': std.max().item(),
+                'x_t_norm': x_t.norm(dim=-1).mean().item(),
+                'x_future_norm': x_future.norm(dim=-1).mean().item(),
+                't_mean': t.mean().item(),
             }
             
             # Add CFG metrics if applicable
             if cond_drop_mask is not None:
                 metrics['cond_drop_rate'] = (1 - cond_drop_mask.mean()).item()
+            
+            # Add weight statistics
+            if hasattr(weight, 'mean'):
+                metrics['loss_weight_mean'] = weight.mean().item()
+                metrics['loss_weight_max'] = weight.max().item()
         
         return loss, metrics
     
