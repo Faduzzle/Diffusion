@@ -117,7 +117,7 @@ class DiffusionTrainer:
     
     def compute_loss(self, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
-        Compute the score matching loss.
+        Compute the score matching loss with classifier-free guidance.
         
         Args:
             batch: Batch of data
@@ -139,8 +139,19 @@ class DiffusionTrainer:
         # Get noised future values using SDE
         x_t = self.sde.sample_transition(x_future, t, noise)
         
-        # Predict score
-        score_pred = self.model(x_t, x_history, t)
+        # Classifier-free guidance: randomly drop conditioning
+        cond_drop_mask = None
+        if self.training and hasattr(self.model, 'cond_drop_prob'):
+            # Get the drop probability from model
+            drop_prob = self.model.cond_drop_prob
+            if drop_prob > 0:
+                # Create binary mask: 1 = keep conditioning, 0 = drop conditioning
+                cond_drop_mask = torch.bernoulli(
+                    torch.ones(batch_size, device=self.device) * (1 - drop_prob)
+                )
+        
+        # Predict score with potential conditioning dropout
+        score_pred = self.model(x_t, x_history, t, cond_drop_mask)
         
         # Compute target score
         _, std = self.sde.transition_kernel(x_future, t)
@@ -167,6 +178,10 @@ class DiffusionTrainer:
                 'target_norm': score_target.norm(dim=-1).mean().item(),
                 'noise_level': std.mean().item(),
             }
+            
+            # Add CFG metrics if applicable
+            if cond_drop_mask is not None:
+                metrics['cond_drop_rate'] = (1 - cond_drop_mask.mean()).item()
         
         return loss, metrics
     

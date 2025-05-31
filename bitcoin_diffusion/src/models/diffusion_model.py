@@ -182,10 +182,11 @@ class DiffusionTransformer(nn.Module):
         history_emb = self.dropout(history_emb)
         future_emb = self.dropout(future_emb)
         
-        # Encode historical context
-        if cond_drop_mask is not None and self.training:
-            # Zero out history for samples where we want unconditional generation
-            history_emb = history_emb * cond_drop_mask.unsqueeze(-1).unsqueeze(-1)
+        # Classifier-free guidance: conditionally drop history
+        if cond_drop_mask is not None:
+            # cond_drop_mask is 1 for conditional, 0 for unconditional
+            # We zero out history embeddings for unconditional samples
+            history_emb = history_emb * cond_drop_mask.view(-1, 1, 1)
         
         memory = self.encoder(history_emb)
         
@@ -212,9 +213,26 @@ class DiffusionTransformer(nn.Module):
         return score
     
     def get_uncond_score(self, x_t: torch.Tensor, x_history: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """Get unconditional score for classifier-free guidance."""
+        """
+        Get unconditional score for classifier-free guidance.
+        
+        This passes a zero mask to drop all conditioning information,
+        making the model predict as if no historical context was provided.
+        """
         batch_size = x_t.size(0)
+        # Create mask of zeros to drop all conditioning
         cond_drop_mask = torch.zeros(batch_size, device=x_t.device)
+        return self.forward(x_t, x_history, t, cond_drop_mask)
+    
+    def get_cond_score(self, x_t: torch.Tensor, x_history: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Get conditional score (standard forward pass).
+        
+        This uses full historical conditioning.
+        """
+        batch_size = x_t.size(0)
+        # Create mask of ones to keep all conditioning
+        cond_drop_mask = torch.ones(batch_size, device=x_t.device)
         return self.forward(x_t, x_history, t, cond_drop_mask)
 
 

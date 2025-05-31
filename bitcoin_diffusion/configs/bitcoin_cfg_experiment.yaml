@@ -1,0 +1,111 @@
+# Configuration for Bitcoin diffusion model with classifier-free guidance experiments
+
+# Inherit from default config
+model:
+  type: "DiffusionTransformer"
+  input_dim: 1              
+  model_dim: 256            
+  num_heads: 8              
+  num_layers: 6             
+  ff_dim: 1024              
+  history_len: 252          # ~1 year of trading days
+  predict_len: 21           # ~1 month ahead
+  dropout: 0.1              
+  cond_drop_prob: 0.15      # Higher dropout for stronger CFG training (15%)
+  use_latent: false         
+
+sde:
+  type: "vpsde"             
+  beta_min: 0.1             
+  beta_max: 20.0            
+
+training:
+  batch_size: 32            
+  learning_rate: 1e-4       
+  min_lr: 1e-6              
+  weight_decay: 0.01        
+  betas: [0.9, 0.999]       
+  num_epochs: 150           # More epochs for CFG training
+  gradient_clip: 1.0        
+  use_ema: true             
+  ema_decay: 0.999          
+  loss_weight_type: "uniform"
+  num_workers: 4            
+  device: "cuda"            
+  checkpoint_dir: "models/checkpoints_cfg"  
+
+data:
+  train_path: "data/processed/bitcoin_train.pt"
+  val_path: "data/processed/bitcoin_val.pt"
+  test_path: "data/processed/bitcoin_test.pt"
+  
+  norm_method: "standard"   
+  returns_method: "log"     
+  fill_method: "ffill"      
+  
+  include_volatility: true  
+  volatility_window: 21     
+  include_technical: false  
+  
+  dataset:
+    stride: 1               
+    mask_prob: 0.0          
+    max_samples: null       
+
+# Multiple evaluation configs for different guidance scales
+evaluation_configs:
+  - name: "no_guidance"
+    num_samples: 100          
+    num_steps: 1000           
+    solver: "euler"           
+    guidance_scale: 1.0       # No guidance
+    
+  - name: "weak_guidance"
+    num_samples: 100          
+    num_steps: 1000           
+    solver: "euler"           
+    guidance_scale: 1.5       # Weak guidance
+    
+  - name: "medium_guidance"
+    num_samples: 100          
+    num_steps: 1000           
+    solver: "euler"           
+    guidance_scale: 2.0       # Medium guidance (recommended)
+    
+  - name: "strong_guidance"
+    num_samples: 100          
+    num_steps: 1000           
+    solver: "euler"           
+    guidance_scale: 3.0       # Strong guidance
+    
+  - name: "very_strong_guidance"
+    num_samples: 100          
+    num_steps: 1000           
+    solver: "euler"           
+    guidance_scale: 5.0       # Very strong guidance
+
+# Default evaluation (for single runs)
+evaluation:
+  num_samples: 100          
+  num_steps: 1000           
+  solver: "euler"           
+  guidance_scale: 2.0       # Default to medium guidance
+  
+  metrics:
+    - "mse"                 
+    - "mae"                 
+    - "sharpe"              
+    - "directional"         
+    - "quantile"            
+    - "crps"                # Important for probabilistic evaluation
+
+visualization:
+  plot_samples: 5           
+  confidence_levels: [0.1, 0.25, 0.75, 0.9]
+  figure_size: [12, 6]      
+  dpi: 100                  
+
+experiment:
+  name: "bitcoin_cfg_ablation"
+  tags: ["bitcoin", "diffusion", "transformer", "cfg", "ablation"]
+  notes: "Classifier-free guidance ablation study with different guidance scales"

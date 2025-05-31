@@ -102,14 +102,24 @@ class DiffusionPredictor:
         """
         batch_size = x.shape[0]
         
-        # Get score prediction
+        # Get score prediction with classifier-free guidance
         with torch.no_grad():
-            score = self.model(x, history, t)
-            
-            # Classifier-free guidance
             if guidance_scale != 1.0 and hasattr(self.model, 'get_uncond_score'):
+                # Classifier-free guidance formula:
+                # score = (1 + w) * cond_score - w * uncond_score
+                # where w = guidance_scale - 1
+                
+                # Get conditional score (with history)
+                cond_score = self.model.get_cond_score(x, history, t)
+                
+                # Get unconditional score (without history)
                 uncond_score = self.model.get_uncond_score(x, history, t)
-                score = uncond_score + guidance_scale * (score - uncond_score)
+                
+                # Apply guidance formula
+                score = uncond_score + guidance_scale * (cond_score - uncond_score)
+            else:
+                # Standard conditional score
+                score = self.model(x, history, t)
         
         # Reverse drift
         drift = self.sde.f(x, t)
@@ -152,17 +162,22 @@ class DiffusionPredictor:
         # Second stage (correction)
         t_next = t - dt
         with torch.no_grad():
-            score_next = self.model(x_euler, history, t_next)
-            
             if guidance_scale != 1.0 and hasattr(self.model, 'get_uncond_score'):
+                # Get scores at next timestep
+                cond_score_next = self.model.get_cond_score(x_euler, history, t_next)
                 uncond_score_next = self.model.get_uncond_score(x_euler, history, t_next)
-                score_next = uncond_score_next + guidance_scale * (score_next - uncond_score_next)
+                score_next = uncond_score_next + guidance_scale * (cond_score_next - uncond_score_next)
+            else:
+                score_next = self.model(x_euler, history, t_next)
         
-        # Average the drifts
-        score = self.model(x, history, t)
-        if guidance_scale != 1.0 and hasattr(self.model, 'get_uncond_score'):
-            uncond_score = self.model.get_uncond_score(x, history, t)
-            score = uncond_score + guidance_scale * (score - uncond_score)
+        # Get score at current timestep for averaging
+        with torch.no_grad():
+            if guidance_scale != 1.0 and hasattr(self.model, 'get_uncond_score'):
+                cond_score = self.model.get_cond_score(x, history, t)
+                uncond_score = self.model.get_uncond_score(x, history, t)
+                score = uncond_score + guidance_scale * (cond_score - uncond_score)
+            else:
+                score = self.model(x, history, t)
         
         # Compute drifts
         t_expanded = t.view(-1, *([1] * (x.dim() - 1)))

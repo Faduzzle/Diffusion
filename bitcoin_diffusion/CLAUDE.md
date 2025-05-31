@@ -63,6 +63,22 @@ The model supports multiple SDE types:
 The forward process gradually adds noise: `dx = f(x,t)dt + g(t)dW`
 The reverse process removes noise using the learned score function.
 
+### Classifier-Free Guidance
+
+The model implements classifier-free guidance (CFG) for controllable generation:
+
+**Training**: During training, historical conditioning is randomly dropped with probability `cond_drop_prob`, teaching the model both conditional and unconditional generation.
+
+**Inference**: At inference time, predictions are computed using:
+```
+score = uncond_score + guidance_scale * (cond_score - uncond_score)
+```
+
+**Guidance Scale Effects**:
+- `guidance_scale = 1.0`: Standard conditional generation
+- `guidance_scale > 1.0`: Stronger conditioning on historical patterns
+- `guidance_scale < 1.0`: Weaker conditioning, more unconditional behavior
+
 ### Data Pipeline
 
 The data pipeline handles:
@@ -84,9 +100,10 @@ The data pipeline handles:
 ### Generation Process
 
 1. **Sample from Prior**: Start with Gaussian noise at t=1
-2. **Reverse Diffusion**: Iteratively denoise using the learned score function
-3. **Numerical Integration**: Use Euler-Maruyama or higher-order solvers
-4. **Ensemble Predictions**: Generate multiple trajectories for uncertainty quantification
+2. **Reverse Diffusion**: Iteratively denoise using the learned score function with CFG
+3. **Classifier-Free Guidance**: Combine conditional and unconditional scores for controllable generation
+4. **Numerical Integration**: Use Euler-Maruyama or higher-order solvers
+5. **Ensemble Predictions**: Generate multiple trajectories for uncertainty quantification
 
 ## Usage Examples
 
@@ -109,16 +126,17 @@ trainer.train()
 ### Generating Predictions
 
 ```python
-from src.evaluation import Predictor
+from src.evaluation import DiffusionPredictor
 
 # Load trained model
-predictor = Predictor.from_checkpoint('models/best_model.pt')
+predictor = DiffusionPredictor.from_checkpoint('models/best_model.pt')
 
-# Generate predictions
+# Generate predictions with classifier-free guidance
 predictions = predictor.predict(
-    history_data=historical_prices,
+    history=historical_prices,
     num_samples=100,
-    num_steps=1000
+    num_steps=1000,
+    guidance_scale=2.0  # Control conditioning strength
 )
 ```
 
@@ -215,17 +233,17 @@ The model is compared against:
 ## Common Commands
 
 ```bash
-# Train model
-python scripts/train.py --config configs/bitcoin_default.yaml
+# Train model with CFG
+python scripts/train.py --config configs/bitcoin_cfg_experiment.yaml
 
-# Generate predictions
+# Generate predictions with different guidance scales
 python scripts/predict.py --checkpoint models/best_model.pt --num-samples 100
+
+# Run CFG experiment
+python scripts/run_cfg_experiment.py --checkpoint models/best_model.pt --data data/test.csv
 
 # Evaluate performance
 python scripts/evaluate.py --predictions outputs/predictions.csv --ground-truth data/test.csv
-
-# Visualize results
-python scripts/visualize.py --data outputs/predictions.csv --output figures/
 ```
 
 ## Troubleshooting
