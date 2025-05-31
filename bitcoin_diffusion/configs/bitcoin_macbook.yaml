@@ -1,0 +1,75 @@
+# MacBook-optimized configuration for Bitcoin diffusion model with CFG
+
+model:
+  type: "DiffusionTransformer"
+  input_dim: 1              
+  model_dim: 192            # Slightly smaller for MPS efficiency
+  num_heads: 6              # Reduced heads for MPS
+  num_layers: 4             # Fewer layers for faster training
+  ff_dim: 768               # Reduced feedforward dimension
+  history_len: 126          # ~6 months (shorter for MPS)
+  predict_len: 21           # ~1 month ahead
+  dropout: 0.1              
+  cond_drop_prob: 0.15      # CFG dropout probability
+  use_latent: false         
+
+sde:
+  type: "vpsde"             
+  beta_min: 0.1             
+  beta_max: 20.0            
+
+training:
+  batch_size: 16            # Smaller batch for MPS memory
+  learning_rate: 0.0002     # Slightly higher LR for faster convergence
+  min_lr: 0.000001              
+  weight_decay: 0.01        
+  betas: [0.9, 0.999]       
+  num_epochs: 30            # Moderate epochs for MacBook
+  gradient_clip: 1.0        
+  use_ema: true             
+  ema_decay: 0.999          
+  loss_weight_type: "uniform"
+  num_workers: 2            # MPS works well with 2 workers
+  device: "auto"            # Will auto-select MPS on MacBook
+  checkpoint_dir: "models/checkpoints_macbook"  
+
+data:
+  train_path: "data/processed/bitcoin_train.pt"
+  val_path: "data/processed/bitcoin_val.pt"
+  test_path: "data/processed/bitcoin_test.pt"
+  
+  norm_method: "standard"   
+  returns_method: "log"     
+  fill_method: "ffill"      
+  
+  include_volatility: true  
+  volatility_window: 21     
+  include_technical: false  
+  
+  dataset:
+    stride: 1               
+    mask_prob: 0.0          
+    max_samples: 2000       # Limit dataset size for MacBook
+
+evaluation:
+  num_samples: 50           # Fewer samples for faster evaluation
+  num_steps: 500            # Fewer diffusion steps
+  solver: "euler"           
+  guidance_scale: 2.0       
+  
+  metrics:
+    - "mse"                 
+    - "mae"                 
+    - "directional"         
+    - "crps"                
+
+visualization:
+  plot_samples: 3           
+  confidence_levels: [0.1, 0.25, 0.75, 0.9]
+  figure_size: [10, 5]      
+  dpi: 100                  
+
+experiment:
+  name: "bitcoin_macbook_cfg"
+  tags: ["bitcoin", "diffusion", "transformer", "cfg", "macbook", "mps"]
+  notes: "MacBook MPS-optimized Bitcoin diffusion model with classifier-free guidance"

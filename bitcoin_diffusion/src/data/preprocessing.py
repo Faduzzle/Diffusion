@@ -58,9 +58,9 @@ class DataPreprocessor:
         # Handle missing values
         fill_method = self.config.get('fill_method', 'ffill')
         if fill_method == 'ffill':
-            df = df.fillna(method='ffill')
+            df = df.ffill()
         elif fill_method == 'bfill':
-            df = df.fillna(method='bfill')
+            df = df.bfill()
         elif fill_method == 'interpolate':
             df = df.interpolate()
         
@@ -311,7 +311,7 @@ class DataPreprocessor:
             Tuple of (data tensor, metadata dict)
         """
         filepath = Path(filepath)
-        checkpoint = torch.load(filepath)
+        checkpoint = torch.load(filepath, weights_only=False)
         
         self.normalization_params = checkpoint.get('normalization_params', {})
         self.metadata = checkpoint.get('metadata', {})

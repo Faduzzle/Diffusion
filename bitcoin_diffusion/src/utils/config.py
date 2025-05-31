@@ -119,13 +119,22 @@ class ConfigValidator:
     @staticmethod
     def validate_training_config(config: Dict[str, Any]):
         """Validate training configuration."""
-        if config.get('batch_size', 1) <= 0:
+        batch_size = config.get('batch_size', 1)
+        if isinstance(batch_size, str):
+            batch_size = int(batch_size)
+        if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         
-        if config.get('learning_rate', 1e-4) <= 0:
+        learning_rate = config.get('learning_rate', 1e-4)
+        if isinstance(learning_rate, str):
+            learning_rate = float(learning_rate)
+        if learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
         
-        if config.get('num_epochs', 1) <= 0:
+        num_epochs = config.get('num_epochs', 1)
+        if isinstance(num_epochs, str):
+            num_epochs = int(num_epochs)
+        if num_epochs <= 0:
             raise ValueError("num_epochs must be positive")
     
     @staticmethod

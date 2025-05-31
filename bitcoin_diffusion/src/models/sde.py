@@ -269,4 +269,7 @@ def create_sde(sde_type: str = 'vpsde', **kwargs) -> SDE:
     if sde_type not in sde_types:
         raise ValueError(f"Unknown SDE type: {sde_type}. Available: {list(sde_types.keys())}")
     
-    return sde_types[sde_type](**kwargs)
+    # Remove 'type' from kwargs if present to avoid conflicts
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k != 'type'}
+    
+    return sde_types[sde_type](**filtered_kwargs)

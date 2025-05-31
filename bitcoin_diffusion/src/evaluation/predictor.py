@@ -37,7 +37,16 @@ class DiffusionPredictor:
         self.model = model
         self.sde = sde
         self.preprocessor = preprocessor
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Device selection with MPS support
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device('cuda')
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                self.device = torch.device('mps')
+            else:
+                self.device = torch.device('cpu')
+        else:
+            self.device = device
         
         self.model.to(self.device)
         self.model.eval()

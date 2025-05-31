@@ -76,8 +76,25 @@ class DiffusionTrainer:
         self.val_loader = val_loader
         self.config = config or {}
         
-        # Device
-        self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
+        # Device with MPS support for MacBook
+        device_str = config.get('device', 'auto')
+        if device_str == 'auto':
+            if torch.cuda.is_available():
+                self.device = torch.device('cuda')
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                self.device = torch.device('mps')
+            else:
+                self.device = torch.device('cpu')
+        else:
+            self.device = torch.device(device_str)
+        
+        print(f"Using device: {self.device}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        if hasattr(torch.backends, 'mps'):
+            print(f"MPS available: {torch.backends.mps.is_available()}")
+        else:
+            print("MPS not available (PyTorch version < 1.12)")
+        
         self.model.to(self.device)
         
         # Optimizer
@@ -141,7 +158,7 @@ class DiffusionTrainer:
         
         # Classifier-free guidance: randomly drop conditioning
         cond_drop_mask = None
-        if self.training and hasattr(self.model, 'cond_drop_prob'):
+        if self.model.training and hasattr(self.model, 'cond_drop_prob'):
             # Get the drop probability from model
             drop_prob = self.model.cond_drop_prob
             if drop_prob > 0:

@@ -30,9 +30,25 @@ def main():
     # Validate configuration
     ConfigValidator.validate_full_config(config)
     
-    # Set GPU device
-    if args.gpu >= 0:
-        config['training']['device'] = f'cuda:{args.gpu}'
+    # Set device intelligently
+    import torch
+    current_device = config['training'].get('device', 'auto')
+    
+    if current_device == 'auto':
+        if args.gpu >= 0 and torch.cuda.is_available():
+            config['training']['device'] = f'cuda:{args.gpu}'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            config['training']['device'] = 'mps'
+            print("Using MPS (Metal Performance Shaders) for MacBook acceleration")
+        else:
+            config['training']['device'] = 'cpu'
+            print("Using CPU (no GPU acceleration available)")
+    elif current_device == 'cuda' and not torch.cuda.is_available():
+        print("Warning: CUDA requested but not available, falling back to MPS or CPU")
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            config['training']['device'] = 'mps'
+        else:
+            config['training']['device'] = 'cpu'
     
     # Create trainer
     trainer = create_trainer(config)
