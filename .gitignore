@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Environment directories
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# VS Code settings
+.vscode/
+
+# PyCharm settings
+.idea/
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Data and Model Files
+**/*.pt
+**/*.pth
+**/*.csv
+**/*.npy
+
+# Keep these file types
+!*.py
+!*.ipynb
+!*.png
+!*.jpg
+!*.jpeg
+!*.gif
+!*.bmp
+!*.tiff
+!*.ico
+
+# Directories that might contain temporary or large files
+**/data/*
+!**/data/*.py
+!**/data/*.ipynb
+!**/data/*.png
+!**/data/*.jpg
+!**/data/*.jpeg
+
+**/outputs/*
+!**/outputs/*.py
+!**/outputs/*.ipynb
+!**/outputs/*.png
+!**/outputs/*.jpg
+!**/outputs/*.jpeg
